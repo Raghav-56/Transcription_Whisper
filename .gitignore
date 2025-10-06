@@ -209,3 +209,6 @@ __marimo__/
 # by me
 
 *.wav
+
+# models
+models/
