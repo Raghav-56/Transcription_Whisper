@@ -1,0 +1,8 @@
+static-ffmpeg 
+pydub 
+nemo-toolkit
+
+typer[all]
+fastapi
+uvicorn[standard]
+python-multipart
