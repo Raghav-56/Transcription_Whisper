@@ -1,5 +1,7 @@
 import os
 import sys
+import subprocess
+from pathlib import Path
 from typing import Any
 
 import static_ffmpeg
@@ -11,9 +13,9 @@ static_ffmpeg.add_paths()  # downloads ffmpeg+ffprobe on first call
 from pydub import AudioSegment
 
 # Option B: get explicit paths and set pydub
-#ffmpeg_path, ffprobe_path = run.get_or_fetch_platform_executables_else_raise()
-#AudioSegment.converter = ffmpeg_path
-#AudioSegment.ffprobe = ffprobe_path
+# ffmpeg_path, ffprobe_path = run.get_or_fetch_platform_executables_else_raise()
+# AudioSegment.converter = ffmpeg_path
+# AudioSegment.ffprobe = ffprobe_path
 
 # now run existing code that uses pydub
 from nemo.collections.asr.models import ASRModel
@@ -34,14 +36,86 @@ def validate_paths(paths: list[str]) -> list[str]:
 
 def load_model(model_name: str = "nvidia/parakeet-tdt-0.6b-v2") -> ASRModel:
     """Load and return the NeMo ASR model."""
-    logger.info("Loading model %s ...", model_name)
+    logger.info("Looking for a local .nemo model for %s", model_name)
+
+    def _find_local_nemo(name: str) -> Path | None:
+        repo_root = Path(__file__).resolve().parents[1]
+        # Prefer these folders (Windows is case-insensitive, support both)
+        candidate_dirs = [repo_root / "Models", repo_root / "models"]
+        safe = name.replace("/", "__").replace(" ", "_") + ".nemo"
+
+        # check explicit filename first
+        for d in candidate_dirs:
+            p = d / safe
+            if p.exists():
+                return p
+
+        # check for any .nemo in the candidate folders
+        for d in candidate_dirs:
+            if d.exists():
+                for p in d.glob("*.nemo"):
+                    return p
+
+        return None
+
+    # Try to find an existing local .nemo first
+    local = _find_local_nemo(model_name)
+    if local is not None:
+        logger.info("Loading model from local file %s", local)
+        return ASRModel.restore_from(restore_path=str(local))
+
+    # No local model found: try to run the local save script (if present)
+    repo_root = Path(__file__).resolve().parents[1]
+    candidates = [
+        Path(__file__).resolve().parent / "save_model.py",
+        repo_root / "Model" / "save_model.py",
+        repo_root / "Src" / "save_model.py",
+    ]
+
+    save_script = None
+    for c in candidates:
+        if c.exists():
+            save_script = c
+            break
+
+    if save_script is not None:
+        out_dir = Path(__file__).resolve().parents[1] / "models"
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(save_script),
+                    "--model",
+                    model_name,
+                    "--out-dir",
+                    str(out_dir),
+                ],
+                check=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            logger.warning("save_model script failed: %s", exc)
+        except Exception as exc:  # pragma: no cover - best-effort fallback
+            logger.warning("Unable to run save script: %s", exc)
+
+        # Attempt to find the created file
+        local = _find_local_nemo(model_name)
+        if local is not None:
+            logger.info("Loading model from newly saved file %s", local)
+            return ASRModel.restore_from(restore_path=str(local))
+
+    # Last resort: load from the hub
+    logger.info("Falling back to ASRModel.from_pretrained(%s)", model_name)
     return ASRModel.from_pretrained(model_name)
 
 
 def transcribe_files(model: ASRModel, files: list[str], batch_size: int = 1):
     """Transcribe files with the given model and return results."""
     logger.info("Transcribing %d file(s)...", len(files))
-    return model.transcribe(files, batch_size=batch_size, return_hypotheses=True, timestamps=True)
+    return model.transcribe(
+        files, batch_size=batch_size, return_hypotheses=True, timestamps=True
+    )
 
 
 def _result_to_dict(file_path: str, result: Any) -> dict:
