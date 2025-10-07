@@ -1,6 +1,6 @@
 static-ffmpeg 
 pydub 
-nemo-toolkit
+nemo_toolkit['asr']
 
 typer[all]
 fastapi
