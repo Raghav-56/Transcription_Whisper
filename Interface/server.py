@@ -44,7 +44,7 @@ app = FastAPI(title="Audio Transcription Pipeline", version="1.0.0")
 #         allow_methods=["*"],
 #         allow_headers=["*"],
 #     )
-# except Exception as exc:  # pragma: no cover - defensive, shouldn't fail
+# except Exception as exc:
 #     logger.exception("Failed to configure CORS middleware: %s", exc)
 
 
