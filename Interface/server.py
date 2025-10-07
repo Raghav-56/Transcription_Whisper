@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import os
 import shutil
@@ -6,27 +8,32 @@ import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
-from typing import Literal
 
 sys.path.append(str(Path(__file__).parent.parent))
 
-from Transcription_parakeet.config.logger_config import logger
+from Transcription_parakeet.App.pipeline import (  # noqa: E402
+    DEFAULT_PARAKEET_MODEL,
+    DEFAULT_SORTFORMER_MODEL,
+    run_pipeline,
+)
+from Transcription_parakeet.config.logger_config import logger  # noqa: E402
 
 app = FastAPI(title="Audio Transcription Pipeline", version="1.0.0")
+
+VALID_MODES: set[str] = {"transcription", "diarization", "combined"}
 
 
 class ProcessRequest(BaseModel):
     file_paths: list[str]
     mode: Literal["transcription", "diarization", "combined"] = "combined"
-    model: str | None = None
-    language: str | None = None
-    device: str | None = None
-    output_format: Literal["json", "txt", "srt", "vtt"] = "json"
-    output: str | None = None
+    model: str | None = DEFAULT_PARAKEET_MODEL
+    batch_size: int = 1
+    diarization_model: str | None = DEFAULT_SORTFORMER_MODEL
+    diarization_batch_size: int | None = None
 
 
 class ProcessResponse(BaseModel):
@@ -38,55 +45,84 @@ class ProcessResponse(BaseModel):
     mode: str
 
 
+def _normalize_mode(mode: str) -> str:
+    if mode not in VALID_MODES:
+        logger.warning("Invalid mode '%s', defaulting to 'combined'", mode)
+        return "combined"
+    return mode
+
+
+def _shape_pipeline_output(
+    mode: str,
+    entries: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if mode == "transcription":
+        return [
+            {
+                "file": item.get("file"),
+                "text": item.get("text"),
+                "score": item.get("score"),
+                "timestamps": item.get("timestamps"),
+            }
+            for item in entries
+        ]
+    if mode == "diarization":
+        return [
+            {
+                "file": item.get("file"),
+                "speakers": item.get("speakers", []),
+            }
+            for item in entries
+        ]
+    return entries
+
+
 def _process_inputs(
     input_paths: list[str],
     mode: str,
+    *,
     model: str | None,
-    language: str | None,
-    device: str,
-    output_format: str,
-    output: str | None,
-):
-    """Small helper that calls unified_api.process_audio and returns the result."""
-    return unified_api.process_audio(
-        inputs=input_paths,
-        mode=mode,
-        include_transcription=(mode != "diarization"),
-        include_diarization=(mode != "transcription"),
-        model=model,
-        language=language,
-        device=device,
-        output_formats=[output_format],
-        output_path=output,
+    batch_size: int | None,
+    diarization_model: str | None,
+    diarization_batch_size: int | None,
+) -> tuple[str, list[dict[str, Any]]]:
+    effective_mode = _normalize_mode(mode)
+    diarize = effective_mode != "transcription"
+    effective_batch = batch_size or 1
+    results = run_pipeline(
+        input_paths,
+        model=model or None,
+        batch_size=effective_batch,
+        diarize=diarize,
+        diarization_model=diarization_model if diarize else None,
+        diarization_batch_size=diarization_batch_size,
     )
+    shaped = _shape_pipeline_output(effective_mode, results)
+    return effective_mode, shaped
 
 
 @app.post("/process_json", response_model=ProcessResponse)
 async def process_audio_json(request: ProcessRequest):
-    """Process audio files from a JSON request body using the Pydantic `ProcessRequest` model."""
     start_time = time.time()
 
-    # Basic validation
     if not request.file_paths:
         raise HTTPException(status_code=400, detail="No files provided.")
 
-    effective_device = request.device or "cpu"
-    if isinstance(effective_device, str) and effective_device.lower() == "auto":
-        effective_device = "cpu"
-
     try:
-        result = _process_inputs(
+        mode, result = _process_inputs(
             input_paths=request.file_paths,
             mode=request.mode,
             model=request.model,
-            language=request.language,
-            device=effective_device,
-            output_format=request.output_format,
-            output=request.output,
+            batch_size=request.batch_size,
+            diarization_model=request.diarization_model,
+            diarization_batch_size=request.diarization_batch_size,
         )
-    except Exception as e:
-        logger.error("Error processing JSON request: %s", e)
-        raise HTTPException(status_code=500, detail="Internal server error") from e
+    except Exception as exc:  # pragma: no cover
+        logger.error("Error processing JSON request: %s", exc)
+        raise HTTPException(
+            status_code=500,
+            detail="Internal server error",
+        ) from exc
 
     processing_time = time.time() - start_time
 
@@ -96,7 +132,7 @@ async def process_audio_json(request: ProcessRequest):
         input_files=[os.path.basename(p) for p in request.file_paths],
         result=result,
         processing_time=processing_time,
-        mode=request.mode,
+        mode=mode,
     )
 
 
@@ -117,55 +153,31 @@ async def health_check():
 @app.post("/process", response_model=ProcessResponse)
 async def process_audio(
     files: list[UploadFile] | None = File(None),
-    file_paths: str | None = Form(None),  # JSON string of file paths
+    file_paths: str | None = Form(None),
     mode: str = Form("combined"),
-    model: str = Form("base"),
-    language: str = Form("auto"),
-    device: str = Form("auto"),
-    output_format: str = Form("json"),
-    output: str | None = Form(None),
+    model: str = Form(DEFAULT_PARAKEET_MODEL),
+    batch_size: int = Form(1),
+    diarization_model: str = Form(DEFAULT_SORTFORMER_MODEL),
+    diarization_batch_size: int | None = Form(None),
 ):
-    """Process audio files. This endpoint is a trimmed server alternative to the CLI.
-
-    Notes:
-    - Web UI serving is intentionally removed. This server only exposes API endpoints.
-    - Files can be uploaded or a JSON string of file paths can be provided in `file_paths`.
-    """
     start_time = time.time()
     temp_files: list[str] = []
+    temp_dir: str | None = None
 
-    # Normalize device
-    effective_device = device or "cpu"
-    if isinstance(effective_device, str) and effective_device.lower() == "auto":
-        effective_device = "cpu"
-        logger.info("Device set to 'auto', defaulting to 'cpu'")
-
-    valid_modes = ["transcription", "diarization", "combined"]
-    if mode not in valid_modes:
-        mode = "combined"
-        logger.warning("Invalid mode, defaulting to 'combined'")
-
-    valid_formats = ["json", "txt", "srt", "vtt"]
-    if output_format not in valid_formats:
-        output_format = "json"
-        logger.warning("Invalid format, defaulting to 'json'")
+    effective_mode = mode.strip() if mode else "combined"
 
     input_paths: list[str] = []
 
-    # Handle uploaded files
     if files:
         temp_dir = tempfile.mkdtemp()
         for file in files:
             if not file.filename:
                 continue
-
             temp_path = os.path.join(temp_dir, file.filename)
             with open(temp_path, "wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)
             input_paths.append(temp_path)
             temp_files.append(temp_path)
-
-    # Handle file paths from JSON or string
     elif file_paths:
         try:
             path_list = json.loads(file_paths)
@@ -179,43 +191,33 @@ async def process_audio(
     if not input_paths:
         raise HTTPException(status_code=400, detail="No files provided.")
 
-    # Process based on mode
-    if mode == "transcription":
-        include_transcription = True
-        include_diarization = False
-    elif mode == "diarization":
-        include_transcription = False
-        include_diarization = True
-    else:  # combined
-        include_transcription = True
-        include_diarization = True
+    cleaned_model = model.strip() if model else None
+    cleaned_diar_model = diarization_model.strip() if diarization_model else None
 
     try:
-        # Call the unified API
-        result = unified_api.process_audio(
-            inputs=input_paths,
-            mode=mode,
-            include_transcription=include_transcription,
-            include_diarization=include_diarization,
-            model=model,
-            language=language,
-            device=effective_device,
-            output_formats=[output_format],
-            output_path=output,
+        mode_value, result = _process_inputs(
+            input_paths=input_paths,
+            mode=effective_mode,
+            model=cleaned_model,
+            batch_size=batch_size,
+            diarization_model=cleaned_diar_model,
+            diarization_batch_size=diarization_batch_size,
         )
-
-    except Exception as e:
-        # Simplified error handling: log and expose a generic HTTP error
-        logger.error("Error processing audio: %s", e)
-        raise HTTPException(status_code=500, detail="Internal server error") from e
-
+    except Exception as exc:  # pragma: no cover
+        logger.error("Error processing audio: %s", exc)
+        raise HTTPException(
+            status_code=500,
+            detail="Internal server error",
+        ) from exc
     finally:
         for temp_file in temp_files:
             try:
                 if os.path.exists(temp_file):
                     os.remove(temp_file)
-            except OSError:
+            except OSError:  # pragma: no cover
                 logger.warning("Failed to cleanup temp file %s", temp_file)
+        if temp_dir and os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
     processing_time = time.time() - start_time
 
@@ -225,12 +227,16 @@ async def process_audio(
         input_files=[os.path.basename(p) for p in input_paths],
         result=result,
         processing_time=processing_time,
-        mode=mode,
+        mode=mode_value,
     )
 
 
 if __name__ == "__main__":
-    # Run with: python -m interface.server
     import uvicorn
 
-    uvicorn.run("Transcription_parakeet.Interface.server:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run(
+        "Transcription_parakeet.Interface.server:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=True,
+    )
