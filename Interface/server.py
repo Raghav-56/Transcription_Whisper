@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 sys.path.append(str(Path(__file__).parent.parent))
@@ -23,6 +24,45 @@ from Transcription_parakeet.App.pipeline import (  # noqa: E402
 from Transcription_parakeet.config.logger_config import logger  # noqa: E402
 
 app = FastAPI(title="Audio Transcription Pipeline", version="1.0.0")
+
+# try:
+#     cors_env = os.getenv("CORS_ALLOWED_ORIGINS", "")
+#     if cors_env:
+#         ALLOWED_ORIGINS = [o.strip() for o in cors_env.split(",") if o.strip()]
+#     else:
+#         ALLOWED_ORIGINS = [
+#             "http://localhost",
+#             "http://localhost:3000",
+#             "http://127.0.0.1",
+#             "http://127.0.0.1:3000",
+#         ]
+#     logger.info("Configuring CORS allowed origins: %s", ALLOWED_ORIGINS)
+#     app.add_middleware(
+#         CORSMiddleware,
+#         allow_origins=ALLOWED_ORIGINS,
+#         allow_credentials=True,
+#         allow_methods=["*"],
+#         allow_headers=["*"],
+#     )
+# except Exception as exc:  # pragma: no cover - defensive, shouldn't fail
+#     logger.exception("Failed to configure CORS middleware: %s", exc)
+
+
+VALID_MODES: set[str] = {
+    "transcription",
+    "diarization",
+    "combined",
+}
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 VALID_MODES: set[str] = {"transcription", "diarization", "combined"}
 
