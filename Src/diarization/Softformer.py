@@ -24,6 +24,19 @@ def load_model(
             restore_path=str(local),
             strict=False,
         )
+        if not hasattr(model, "diarize"):
+            logger.warning("Local checkpoint not diarization: %s", local)
+            logger.warning("Missing 'diarize'; will try pretrained model")
+            try:
+                model = SortformerEncLabelModel.from_pretrained(model_name)
+            except Exception:
+                logger.exception(
+                    "Failed to load pretrained diarization model '%s' after "
+                    "restoring local checkpoint %s.",
+                    model_name,
+                    local,
+                )
+                raise
         model.eval()
         return model
 
@@ -124,7 +137,10 @@ def convert_results(
     paths: Sequence[str],
     segments: Sequence[Sequence[Any]],
 ) -> list[dict[str, Any]]:
-    return [_segments_to_dict(paths[idx], seg) for idx, seg in enumerate(segments)]
+    results: list[dict[str, Any]] = []
+    for idx, seg in enumerate(segments):
+        results.append(_segments_to_dict(paths[idx], seg))
+    return results
 
 
 def print_results(
@@ -136,10 +152,17 @@ def print_results(
         logger.info("----")
         logger.info("File: %s", file_path)
         logger.info("Detected speaker segments: %d", len(seg))
-        preview = ", ".join(
-            f"[{float(start):.2f}-{float(end):.2f}] spk {int(spk)}"
-            for start, end, spk in seg[:5]
-        )
+        # Use _parse_segment to safely handle different segment entry shapes
+        preview_items: list[str] = []
+        for entry in seg[:5]:
+            parsed = _parse_segment(entry)
+            if parsed is None:
+                continue
+            start, end, spk = parsed
+            preview_items.append(
+                f"[{float(start):.2f}-{float(end):.2f}] spk {int(spk)}"
+            )
+        preview = ", ".join(preview_items)
         if preview:
             logger.info("Preview: %s", preview)
         else:

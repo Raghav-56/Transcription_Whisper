@@ -1,8 +1,8 @@
 static-ffmpeg 
 pydub 
-nemo_toolkit['asr']
+nemo_toolkit[asr]
 
-typer[all]
+typer
 fastapi
 uvicorn[standard]
 python-multipart
