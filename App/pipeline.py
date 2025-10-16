@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 from typing import Any
+import csv
+import json
 import os
 import subprocess
+from datetime import datetime
+from pathlib import Path
 
 from Transcription_parakeet.Src.transcription.Parakeet import (
     DEFAULT_PARAKEET_MODEL,
@@ -28,6 +32,98 @@ from Transcription_parakeet.Src.model.model_cache import (
 )
 from Transcription_parakeet.Src.model.save_model import download_and_save
 from Transcription_parakeet.config.logger_config import logger
+
+
+RESULTS_DIR = Path(__file__).resolve().parents[1] / "results"
+
+
+def _timestamp() -> str:
+    return datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+
+
+def _make_run_directory() -> Path:
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    base_name = _timestamp()
+    run_dir = RESULTS_DIR / base_name
+    counter = 1
+    while run_dir.exists():
+        run_dir = RESULTS_DIR / f"{base_name}_{counter:02d}"
+        counter += 1
+    run_dir.mkdir()
+    return run_dir
+
+
+def _write_combined_json(run_dir: Path, entries: list[dict[str, Any]]) -> None:
+    output_path = run_dir / "combined.json"
+    with output_path.open("w", encoding="utf-8") as fh:
+        json.dump(entries, fh, ensure_ascii=False, indent=2)
+    logger.info("Saved combined JSON results to %s", output_path)
+
+
+def _write_transcription_csv(run_dir: Path, entries: list[dict[str, Any]]) -> None:
+    fieldnames = ["AudioFileName", "Transcript", "Confidence"]
+    output_path = run_dir / "ASR_00.csv"
+    with output_path.open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=fieldnames)
+        writer.writeheader()
+        for item in entries:
+            score = item.get("score")
+            writer.writerow(
+                {
+                    "AudioFileName": Path(item.get("file", "")).name,
+                    "Transcript": item.get("text", ""),
+                    "Confidence": "" if score is None else score,
+                }
+            )
+    logger.info("Saved transcription CSV results to %s", output_path)
+
+
+def _format_ts(value: float) -> str:
+    return f"{value:06.3f}"
+
+
+def _write_diarization_csv(run_dir: Path, entries: list[dict[str, Any]]) -> None:
+    fieldnames = ["AudioFileName", "Speaker", "Confidence", "StartTS", "EndTS"]
+    rows: list[dict[str, Any]] = []
+    for item in entries:
+        speakers = item.get("speakers") or []
+        if not speakers:
+            continue
+        filename = Path(item.get("file", "")).name
+        for segment in speakers:
+            start = segment.get("start")
+            end = segment.get("end")
+            speaker_label = segment.get("speaker_label") or segment.get("speaker_index")
+            if start is None or end is None:
+                continue
+            rows.append(
+                {
+                    "AudioFileName": filename,
+                    "Speaker": speaker_label,
+                    "Confidence": segment.get("confidence", 100),
+                    "StartTS": _format_ts(float(start)),
+                    "EndTS": _format_ts(float(end)),
+                }
+            )
+
+    if not rows:
+        logger.info("No diarization segments to save; skipping SD_00.csv")
+        return
+
+    output_path = run_dir / "SD_00.csv"
+    with output_path.open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    logger.info("Saved diarization CSV results to %s", output_path)
+
+
+def _persist_results(entries: list[dict[str, Any]]) -> None:
+    run_dir = _make_run_directory()
+    _write_combined_json(run_dir, entries)
+    _write_transcription_csv(run_dir, entries)
+    _write_diarization_csv(run_dir, entries)
+    logger.info("Results saved under %s", run_dir)
 
 
 def _ensure_local_model(model_name: str) -> None:
@@ -114,6 +210,10 @@ def run_pipeline(
                 structured.append(_result_to_dict(originals_for_prepared[i], r))
 
             if not diarize:
+                try:
+                    _persist_results(structured)
+                except Exception as exc:  # pragma: no cover - best effort
+                    logger.warning("Unable to persist results: %s", exc)
                 return structured
 
             diar_model_name = diarization_model or DEFAULT_SORTFORMER_MODEL
@@ -130,6 +230,10 @@ def run_pipeline(
                 originals_for_prepared, diar_segments
             )
             _merge_diarization(structured, diar_structured)
+            try:
+                _persist_results(structured)
+            except Exception as exc:  # pragma: no cover - best effort
+                logger.warning("Unable to persist results: %s", exc)
             return structured
     # pragma: no cover - bubble up friendly error
     except (subprocess.CalledProcessError, OSError) as exc:

@@ -1,0 +1,36 @@
+Dear Participant,
+
+Greetings!
+
+Hope you have gone through the Mock Dataset, specifically the Readme file, of the Problem Statement No. 6 on the AI Grand Challenge portal.
+
+The Readme file gives complete instructions on submission of your results on the portal. Thus, we reproduce it here and request you to kindly make a note of the deadline of submission of your results on the Mock Dataset which is upto 2359 hours on 1st October 2025 (Wednesday)
+
+QUOTE:
+
+Dear Participants,
+
+           Hope you are doing well and until now each of your subproblem modules are producing results. We have uploaded three audio files and one audio file named "ID01.wav" as enrollment audio for Speaker Diarization. You are requested to submit your results as per format of ground truth released by us on 21 Sep 25 (Also, as given in the Appendix A of PS-06 document).
+
+Submission of this mock1 results are to be done on or before 2359 hrs on 01 Oct 25.
+
+We request you to check your submissions as per following check list:-
+
+1. The result files are in CSV (Comma Separated Value) format only. Any other format like tab separation will be summarily rejected.
+2. The values are arranged in the desired format only as these are going to be evaluated by Script at our end. Like for Speaker Diarization result, the SD_00 file has  
+           AudioFileName,Speaker,Confidence,StartTS ,EndTS
+           ps_00_201.wav,Speaker1,100,002.341,002.798
+           ps_00_201.wav,Speaker2,100,006.638,007.552
+3. Naming convention is followed properly i.e. file names are ASR_00.csv, LID_00.csv etc.
+4. There is no requirement to submit your solution HASH for this submission (will be mandatory during Shortlisting Stage).
+5. Prepare a text file named <your application_id/registration_id>_<evaluation_id (00 in this case)>.txt with only following info to run/execute your solution:-
+           a. Hardware Requirement
+           b. Platform/Virtualization Requirement (i.e exsi, hperV etc with virtual cores, memory and storage etc)
+           c. Any other point you want to bring out.
+6. All five result files and text file as per point 5 above is zipped in single file named as <your application_id/registration_id>_<evaluation_id (00 in this case)>.zip
+
+UNQUOTE:
+
+Looking forward to submissions of your results on Mock Dataset of PS06 by 2359 hours on 1st October 2025...
+
+Best wishes
