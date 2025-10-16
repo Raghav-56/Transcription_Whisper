@@ -8,7 +8,10 @@ from Dataset_d.common import DatasetDownloadError, DownloadResult
 from Dataset_d.drive import GoogleDriveDownloader
 from Dataset_d.gh_d import GitHubDownloader
 from Dataset_d.hf_d import HuggingFaceDownloader
+from Dataset_d.http_d import HTTPDownloader
 from Dataset_d.kaggle_d import KaggleDownloader
+from Dataset_d.local_d import LocalDatasetImporter
+from Dataset_d.s3_d import S3Downloader
 
 DATASETS_ROOT = Path(__file__).resolve().parent / "data"
 
@@ -21,6 +24,13 @@ DOWNLOADERS: Mapping[str, DownloaderType] = {
     "google_drive": GoogleDriveDownloader,
     "gdrive": GoogleDriveDownloader,
     "kaggle": KaggleDownloader,
+    "http": HTTPDownloader,
+    "https": HTTPDownloader,
+    "url": HTTPDownloader,
+    "s3": S3Downloader,
+    "aws": S3Downloader,
+    "local": LocalDatasetImporter,
+    "filesystem": LocalDatasetImporter,
 }
 
 
